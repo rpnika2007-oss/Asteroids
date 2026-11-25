@@ -67,6 +67,7 @@ class Game:
     def start(self) -> None:
         """Сбрасывает счёт и создаёт объекты новой партии."""
         self._clear_field()
+        self.explosions.clear()
         self.lives = cfg.START_LIVES
         self.score = 0
         self.spawn_timer = cfg.SPAWN_INTERVAL
@@ -76,14 +77,13 @@ class Game:
         self.state = State.PLAYING
 
     def _clear_field(self) -> None:
-        """Освобождает поле от игровых объектов и эффектов."""
+        """Освободить поле от корабля, астероидов и ракет."""
         self.ship = None
         self.asteroids.clear()
         self.rockets.clear()
-        self.explosions.clear()
 
     def _spawn_asteroid(self, ship: Ship) -> None:
-        """Выбирает случайную позицию вне безопасной зоны вокруг корабля."""
+        """Создать астероид на безопасном расстоянии от корабля."""
         image, radius = choice(self.asteroid_types)
         clearance = ship.radius + radius + cfg.SPAWN_CLEARANCE
         while True:
@@ -95,7 +95,7 @@ class Game:
                 return
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        """Обрабатывает выход, щелчок по заставке и одиночный выстрел."""
+        """Обработать выход, щелчок по заставке и выстрел."""
         if event.type == pygame.QUIT:
             self.running = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -118,7 +118,11 @@ class Game:
         )
 
     def _resolve_collisions(self, ship: Ship) -> None:
-        """Сначала разрешает попадания ракет, затем удар по кораблю."""
+        """Разрешить попадания ракет перед столкновением корабля.
+
+        Удалённый астероид сразу перестаёт участвовать в проверках.
+        При завершении партии на экране остаётся только последний взрыв.
+        """
         for rocket in self.rockets[:]:
             for asteroid in self.asteroids:
                 if rocket.touches(asteroid):
@@ -131,6 +135,8 @@ class Game:
             return
         for asteroid in self.asteroids:
             if ship.touches(asteroid):
+                if self.lives == 0:
+                    self.explosions.clear()
                 self._destroy_asteroid(asteroid)
                 if self.lives > 0:
                     self.lives -= 1
@@ -153,21 +159,28 @@ class Game:
             asteroid.update(dt)
         for rocket in self.rockets:
             rocket.update(dt)
-        self.rockets = [rocket for rocket in self.rockets if rocket.in_bounds]
-        for explosion in self.explosions:
-            explosion.update(dt)
-        self.explosions = [fx for fx in self.explosions if not fx.finished]
+        self._update_explosions(dt)
         self._resolve_collisions(ship)
         self.rockets = [rocket for rocket in self.rockets if rocket.remaining]
 
+    def _update_explosions(self, dt: float) -> None:
+        """Продвинуть анимации и удалить завершённые взрывы."""
+        for explosion in self.explosions:
+            explosion.update(dt)
+        self.explosions = [fx for fx in self.explosions if not fx.finished]
+
     def update(self, dt: float, turn: int, thrust: bool) -> None:
-        """Прокручивает фон и делит длительность кадра на короткие шаги."""
+        """Обновить фон и продвинуть игровое состояние за dt секунд."""
         self.background.update(dt)
         ship = self.ship
-        if ship is None or dt <= 0:
+        if dt <= 0:
+            return
+        if ship is None:
+            self._update_explosions(dt)
             return
 
         ship.set_controls(turn, thrust)
+        # Короткие шаги уменьшают риск пропустить столкновение.
         steps = ceil(dt / cfg.MAX_PHYSICS_STEP)
         for _ in range(steps):
             self._step(dt / steps, ship)
@@ -191,13 +204,13 @@ class Game:
         self.screen.blit(number, (x + cfg.HUD_INSET, rect.y + cfg.HUD_VALUE_Y))
 
     def _draw_hud(self) -> None:
-        """Показывает очки и оставшиеся возрождения во всех состояниях."""
+        """Показать счётчики очков и оставшихся возрождений."""
         self._draw_counter(cfg.HUD_MARGIN, "ОЧКИ", self.score)
         right_x = cfg.SCREEN_WIDTH - cfg.HUD_MARGIN - cfg.HUD_SIZE[0]
         self._draw_counter(right_x, "ЖИЗНИ", self.lives)
 
     def _card_center(self, y: int) -> tuple[int, int]:
-        """Переводит локальную высоту элемента заставки в координаты окна."""
+        """Перевести координату элемента заставки в координаты окна."""
         return self.card.centerx, self.card.top + y
 
     def _draw_card(self) -> None:
@@ -254,10 +267,10 @@ class Game:
             for rocket in self.rockets:
                 rocket.draw(self.screen)
             self.ship.draw(self.screen)
-            for explosion in self.explosions:
-                explosion.draw(self.screen)
         else:
             self._draw_card()
+        for explosion in self.explosions:
+            explosion.draw(self.screen)
         self._draw_hud()
         pygame.display.flip()
 
@@ -276,7 +289,7 @@ class Game:
 
 
 def main() -> None:
-    """Инициализирует нужные подсистемы Pygame и закрывает их при выходе."""
+    """Открыть окно игры и освободить ресурсы Pygame при выходе."""
     pygame.display.init()
     pygame.font.init()
     try:

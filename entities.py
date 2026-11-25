@@ -11,7 +11,11 @@ from effects import draw_wrapped
 
 
 def torus_distance_squared(first: Vector2, second: Vector2) -> float:
-    """Возвращает квадрат кратчайшего расстояния между точками тора."""
+    """Вернуть квадрат кратчайшего расстояния между двумя точками.
+
+    Для каждой оси выбирается ближайшая копия точки по другую сторону
+    границы, если путь через неё короче прямого.
+    """
     half_width = cfg.SCREEN_WIDTH / 2
     half_height = cfg.SCREEN_HEIGHT / 2
     dx = (first.x - second.x + half_width) % cfg.SCREEN_WIDTH - half_width
@@ -20,9 +24,7 @@ def torus_distance_squared(first: Vector2, second: Vector2) -> float:
 
 
 class GameObject:
-    """Хранит кинематику, круговую коллизию и исходный спрайт объекта."""
-
-    wraps: bool = True
+    """Движущийся объект со спрайтом и круглой областью столкновения."""
 
     def __init__(
         self,
@@ -41,14 +43,15 @@ class GameObject:
 
     @property
     def forward(self) -> Vector2:
-        """Возвращает единичный вектор вдоль носа вертикального спрайта."""
+        """Вернуть единичный вектор в направлении носа спрайта."""
+        # Спрайт смотрит вверх при нулевом угле. Ось Y направлена вниз.
         return Vector2(0, -1).rotate(self.angle)
 
     def wrap(self) -> None:
-        """Переносит центр через границы поля с сохранением остатка пути."""
-        if self.wraps:
-            self.position.x %= cfg.SCREEN_WIDTH
-            self.position.y %= cfg.SCREEN_HEIGHT
+        """Перенести центр объекта на противоположную сторону поля."""
+        # Остаток от деления сохраняет часть пути, пройденную за краем.
+        self.position.x %= cfg.SCREEN_WIDTH
+        self.position.y %= cfg.SCREEN_HEIGHT
 
     def update(self, dt: float) -> None:
         """Сдвигает и поворачивает объект за dt секунд."""
@@ -57,27 +60,24 @@ class GameObject:
         self.wrap()
 
     def touches(self, other: "GameObject") -> bool:
-        """Проверяет пересечение кругов, включая области возле границ."""
+        """Проверить, соприкасаются ли круги на тороидальном поле."""
         radius_sum = self.radius + other.radius
         distance = torus_distance_squared(self.position, other.position)
+        # Сравнение квадратов позволяет обойтись без извлечения корня.
         return distance <= radius_sum ** 2
 
     def draw(self, target: pygame.Surface) -> None:
         """Вращает исходный спрайт относительно текущего центра."""
-        # Vector2.rotate и transform.rotate используют разные знаки на экране.
+        # У поворотов вектора и спрайта на экране разные знаки.
         rotated = pygame.transform.rotate(self.image, -self.angle)
-        if self.wraps:
-            draw_wrapped(target, rotated, self.position)
-        else:
-            center = round(self.position.x), round(self.position.y)
-            target.blit(rotated, rotated.get_rect(center=center))
+        draw_wrapped(target, rotated, self.position)
 
 
 class Ship(GameObject):
     """Корабль с управляемой угловой скоростью, тягой и инерцией."""
 
     def __init__(self, idle: pygame.Surface, thrust: pygame.Surface) -> None:
-        """Создаёт корабль в центре и запоминает оба варианта спрайта."""
+        """Создать корабль в центре и сохранить оба варианта спрайта."""
         super().__init__(Vector2(cfg.SCREEN_CENTER), idle, cfg.SHIP_RADIUS)
         self.idle_image = idle
         self.thrust_image = thrust
@@ -92,14 +92,20 @@ class Ship(GameObject):
         self.image = self.thrust_image if thrust else self.idle_image
 
     def update(self, dt: float) -> None:
-        """Обновляет угол, интегрирует тягу и ограничивает скорость."""
-        # Средний угол шага точнее задаёт тягу при одновременном повороте.
+        """Обновить движение, задержку выстрела и время неуязвимости.
+
+        Параметр dt задаёт длину шага в секундах. При повороте тяга
+        направляется по среднему углу за шаг.
+        """
         middle_angle = self.angle + self.angular_speed * dt / 2
         if self.engine_on:
             thrust = Vector2(0, -cfg.SHIP_ACCELERATION).rotate(middle_angle)
+            # Ускорение за dt меняет скорость в направлении тяги.
             self.velocity += thrust * dt
+            # Ограничиваем модуль скорости, сохраняя направление.
             self.velocity.clamp_magnitude_ip(cfg.SHIP_MAX_SPEED)
         else:
+            # Экспоненциальное затухание зависит от прошедшего времени.
             self.velocity *= exp(-cfg.SHIP_DRAG * dt)
             if self.velocity.length_squared() < cfg.SHIP_STOP_SPEED ** 2:
                 self.velocity.update(0, 0)
@@ -108,13 +114,12 @@ class Ship(GameObject):
         super().update(dt)
 
     def fire(self, image: pygame.Surface) -> "Rocket | None":
-        """Выпускает ракету из носа, когда завершилась задержка выстрела."""
+        """Создать ракету из носа или вернуть None во время задержки."""
         if self.shot_timer > cfg.TIME_EPSILON:
             return None
         self.shot_timer = cfg.SHOT_INTERVAL
         muzzle = self.position + self.forward * cfg.SHIP_NOSE
-        rocket = Rocket(muzzle, self.angle, image)
-        return rocket if rocket.in_bounds else None
+        return Rocket(muzzle, self.angle, image)
 
     def respawn(self) -> None:
         """Сбрасывает кинематику и включает защиту в центре поля."""
@@ -148,25 +153,15 @@ class Asteroid(GameObject):
 class Rocket(GameObject):
     """Снаряд с неизменной ориентацией, скоростью и временем жизни."""
 
-    wraps = False
-
     def __init__(
         self, muzzle: Vector2, angle: float, image: pygame.Surface
     ) -> None:
-        """Ставит хвост спрайта на нос корабля и задаёт вектор полёта."""
+        """Совместить хвост ракеты с носом и задать вектор полёта."""
         offset = Vector2(0, -cfg.ROCKET_TAIL).rotate(angle)
         super().__init__(muzzle + offset, image, cfg.ROCKET_RADIUS)
         self.angle = angle
         self.velocity = self.forward * cfg.ROCKET_SPEED
         self.remaining = cfg.ROCKET_LIFETIME
-
-    @property
-    def in_bounds(self) -> bool:
-        """Проверяет, находится ли центр ракеты внутри игрового поля."""
-        return (
-            0 <= self.position.x < cfg.SCREEN_WIDTH
-            and 0 <= self.position.y < cfg.SCREEN_HEIGHT
-        )
 
     def update(self, dt: float) -> None:
         """Продвигает ракету в пределах оставшегося времени жизни."""

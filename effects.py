@@ -7,7 +7,7 @@ import settings as cfg
 
 
 def load_image(name: str) -> pygame.Surface:
-    """Загружает локальное изображение с прозрачностью в формате экрана."""
+    """Загрузить изображение с прозрачностью в формате экрана."""
     return pygame.image.load(str(cfg.ASSETS_DIR / name)).convert_alpha()
 
 
@@ -65,19 +65,22 @@ class Background:
 
 
 class Explosion:
-    """Одно воспроизведение общей последовательности кадров в точке удара."""
+    """Однократная анимация взрыва в точке столкновения."""
 
     def __init__(
         self, position: Vector2, frames: tuple[pygame.Surface, ...]
     ) -> None:
-        """Запоминает местоположение, набор кадров и собственный таймер."""
+        """Скопировать позицию и запустить отдельный таймер анимации."""
         self.position = position.copy()
         self.frames = frames
         self.elapsed = 0.0
 
     @staticmethod
     def load_frames() -> tuple[pygame.Surface, ...]:
-        """Разрезает PNG-сетку на кадры в порядке строк."""
+        """Вернуть кадры спрайт-листа слева направо и сверху вниз.
+
+        Размер изображения должен точно соответствовать сетке тайлов.
+        """
         sheet = load_image("explosion.png")
         width, height = cfg.EXPLOSION_TILE
         expected = (width * cfg.EXPLOSION_COLUMNS, height * cfg.EXPLOSION_ROWS)
@@ -92,6 +95,7 @@ class Explosion:
     @property
     def frame_index(self) -> int:
         """Вычисляет текущий номер кадра по времени с начала взрыва."""
+        # Индекс равен числу полностью прошедших интервалов показа.
         return int((self.elapsed + cfg.TIME_EPSILON) / cfg.EXPLOSION_INTERVAL)
 
     @property
